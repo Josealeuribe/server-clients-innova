@@ -1,0 +1,102 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+// Cliente registrado. Un cliente solo puede tener un BonoGanado en toda
+// su vida (ver restricción @unique en BonoGanado.clienteId) — es la regla
+// de negocio "un jugador no puede ganar más de un bono".
+model Cliente {
+  id             Int      @id @default(autoincrement())
+  nombres        String
+  apellidos      String
+  docTipo        String
+  docNumero      String   @unique
+  nacimiento     DateTime
+  telefono       String
+  departamento   String
+  ciudad         String
+  email          String   @unique
+  passwordHash   String
+  createdAt      DateTime @default(now())
+
+  consentimientos Consentimiento[]
+  bono            BonoGanado?
+
+  @@map("clientes")
+}
+
+// Registro auditable de cada aceptación legal del formulario de registro
+// (términos, tratamiento de datos, mayoría de edad, condiciones de la
+// promoción, comunicaciones opcionales). Queda fecha y versión del texto
+// aceptado por si el texto legal cambia en el futuro.
+model Consentimiento {
+  id         Int      @id @default(autoincrement())
+  clienteId  Int
+  cliente    Cliente  @relation(fields: [clienteId], references: [id], onDelete: Cascade)
+  tipo       String
+  aceptado   Boolean
+  version    String   @default("v1")
+  aceptadoEn DateTime @default(now())
+
+  @@index([clienteId])
+  @@map("consentimientos")
+}
+
+// Catálogo administrable de premios de la ruleta "Gira y Gana".
+// `clave` es el identificador estable que el frontend usa para mapear
+// cada premio a su ícono/color (esos datos visuales siguen viviendo en
+// src/shared/data/prizes.ts, no se duplican aquí).
+model Premio {
+  id        Int          @id @default(autoincrement())
+  clave     String       @unique
+  nombre    String
+  detalle   String       @db.Text
+  monetario Boolean      @default(false)
+  weight    Int
+  activo    Boolean      @default(true)
+
+  bonos BonoGanado[]
+
+  @@map("premios")
+}
+
+// El bono que un cliente ganó al girar la ruleta y reclamó al registrarse.
+// clienteId es @unique: la base de datos, no solo el frontend, impide que
+// un mismo jugador acumule más de un bono.
+model BonoGanado {
+  id            Int      @id @default(autoincrement())
+  clienteId     Int      @unique
+  cliente       Cliente  @relation(fields: [clienteId], references: [id], onDelete: Cascade)
+  premioId      Int
+  premio        Premio   @relation(fields: [premioId], references: [id])
+  codigo        String   @unique
+  estado        String   @default("pendiente") // pendiente | reclamado
+  creadoEn      DateTime @default(now())
+  canjeadoEn    DateTime?
+  canjeadoPorId Int?
+  canjeadoPor   Usuario? @relation(fields: [canjeadoPorId], references: [id])
+
+  @@map("bonos_ganados")
+}
+
+// Cuentas de personal interno (no clientes). Entran por el mismo login del
+// navbar; el rol decide a qué panel se les redirige tras autenticarse.
+// No hay auto-registro: se siembran directamente (ver prisma/seed-staff.ts).
+model Usuario {
+  id           Int      @id @default(autoincrement())
+  nombre       String
+  email        String   @unique
+  passwordHash String
+  rol          String // 'admin' | 'cajero'
+  activo       Boolean  @default(true)
+  createdAt    DateTime @default(now())
+
+  canjes BonoGanado[]
+
+  @@map("usuarios")
+}
