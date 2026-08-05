@@ -8,7 +8,22 @@ import { cajeroRouter } from './routes/cajero.routes.js'
 
 const app = express()
 
-app.use(cors({ origin: process.env.CORS_ORIGIN || 'http://localhost:8443' }))
+// CORS_ORIGIN acepta varios origenes separados por coma: en produccion el
+// front vive en otro dominio de Render, asi que no basta con un valor fijo.
+const allowedOrigins = (process.env.CORS_ORIGIN || 'http://localhost:8443')
+  .split(',')
+  .map((origin) => origin.trim())
+  .filter(Boolean)
+
+app.use(
+  cors({
+    origin(origin, callback) {
+      // Sin cabecera Origin = health check de Render, curl o same-origin.
+      if (!origin || allowedOrigins.includes(origin)) return callback(null, true)
+      callback(new Error('Origen no permitido por CORS.'))
+    },
+  }),
+)
 app.use(express.json())
 
 app.get('/api/health', (_req, res) => res.json({ ok: true }))
