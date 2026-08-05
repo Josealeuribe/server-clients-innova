@@ -10,17 +10,30 @@ const app = express()
 
 // CORS_ORIGIN acepta varios origenes separados por coma: en produccion el
 // front vive en otro dominio de Render, asi que no basta con un valor fijo.
+// Se normaliza la barra final porque un origen nunca la lleva: el navegador
+// manda "https://sitio.com", asi que "https://sitio.com/" jamas coincidiria.
+const normalizarOrigen = (valor: string) => valor.trim().replace(/\/+$/, '')
+
 const allowedOrigins = (process.env.CORS_ORIGIN || 'http://localhost:8443')
   .split(',')
-  .map((origin) => origin.trim())
+  .map(normalizarOrigen)
   .filter(Boolean)
+
+console.log('CORS habilitado para:', allowedOrigins.join(', '))
 
 app.use(
   cors({
     origin(origin, callback) {
       // Sin cabecera Origin = health check de Render, curl o same-origin.
-      if (!origin || allowedOrigins.includes(origin)) return callback(null, true)
-      callback(new Error('Origen no permitido por CORS.'))
+      if (!origin || allowedOrigins.includes(normalizarOrigen(origin))) {
+        return callback(null, true)
+      }
+      // Rechazar con `false` y no con un Error: un Error se convierte en un
+      // 500 sin cabeceras CORS, que en el navegador se ve identico a un
+      // servidor caido. Asi la respuesta es normal, solo sin permiso, y el
+      // log deja ver que origen se rechazo.
+      console.warn(`CORS: origen rechazado -> ${origin}`)
+      return callback(null, false)
     },
   }),
 )
