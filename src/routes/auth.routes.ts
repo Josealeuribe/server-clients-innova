@@ -165,6 +165,17 @@ authRouter.post('/register', async (req, res) => {
     return res.status(400).json({ error: 'Debes ser mayor de 18 años para registrarte.' })
   }
 
+  // El departamento y la ciudad se validan contra la tabla de ubicaciones.
+  // Antes se aceptaba cualquier texto: bastaba con llamar la API a mano para
+  // guardar un cliente en una ciudad inexistente.
+  const municipio = await prisma.municipio.findFirst({
+    where: { nombre: data.city, departamento: { nombre: data.dept, activo: true } },
+    select: { id: true },
+  })
+  if (!municipio) {
+    return res.status(400).json({ error: 'El departamento o la ciudad seleccionados no son válidos.' })
+  }
+
   const existente = await prisma.cliente.findFirst({
     where: { OR: [{ email: data.email }, { docNumero: data.docNum }] },
   })
@@ -183,6 +194,16 @@ authRouter.post('/register', async (req, res) => {
     } catch {
       bonoError = 'Tu premio ya no está disponible (el tiempo para reclamarlo expiró).'
     }
+  }
+
+  // El premio se consulta ANTES de abrir la transacción: es catálogo de solo
+  // lectura y no tiene por qué alargarla. Las transacciones interactivas de
+  // Prisma tienen un tope de tiempo y, si se pasa, el registro completo falla.
+  const premio = premioTicket
+    ? await prisma.premio.findUnique({ where: { clave: premioTicket.clave } })
+    : null
+  if (premioTicket && (!premio || !premio.activo)) {
+    bonoError = 'Tu premio ya no está disponible.'
   }
 
   try {
@@ -213,41 +234,44 @@ authRouter.post('/register', async (req, res) => {
       })
 
       let bono = null
-      if (premioTicket) {
-        const premio = await tx.premio.findUnique({ where: { clave: premioTicket.clave } })
-        if (premio && premio.activo) {
-          // El código debe ser único (columna @unique en BonoGanado). La
-          // colisión es muy improbable (65.536 combinaciones posibles por
-          // sufijo), pero se reintenta unas pocas veces en vez de confiar
-          // ciegamente en el azar.
-          for (let intento = 0; intento < 5 && !bono; intento++) {
-            try {
-              bono = await tx.bonoGanado.create({
-                data: {
-                  clienteId: cliente.id,
-                  premioId: premio.id,
-                  codigo: generarCodigoCanje(),
-                  // Copia de la vigencia del premio: si mañana se extiende o
-                  // acorta la promoción, este bono conserva la condición con
-                  // la que se entregó.
-                  vigenciaHasta: premio.vigenciaHasta,
-                },
-                include: BONO_INCLUDE,
-              })
-            } catch (error) {
-              const esColisionDeCodigo =
-                error instanceof Prisma.PrismaClientKnownRequestError &&
-                error.code === 'P2002' &&
-                (error.meta?.target as string[] | undefined)?.includes('codigo')
-              if (!esColisionDeCodigo || intento === 4) throw error
-            }
+      if (premio && premio.activo) {
+        // El código debe ser único (columna @unique en BonoGanado). Con 6
+        // caracteres hex la colisión es prácticamente imposible, pero el
+        // reintento se mantiene: la unicidad la impone la base y hay que
+        // saber reaccionar si alguna vez choca.
+        for (let intento = 0; intento < 5 && !bono; intento++) {
+          try {
+            bono = await tx.bonoGanado.create({
+              data: {
+                clienteId: cliente.id,
+                premioId: premio.id,
+                codigo: generarCodigoCanje(),
+                // Copia de la vigencia del premio: si mañana se extiende o
+                // acorta la promoción, este bono conserva la condición con
+                // la que se entregó.
+                vigenciaHasta: premio.vigenciaHasta,
+              },
+              include: BONO_INCLUDE,
+            })
+          } catch (error) {
+            const esColisionDeCodigo =
+              error instanceof Prisma.PrismaClientKnownRequestError &&
+              error.code === 'P2002' &&
+              (error.meta?.target as string[] | undefined)?.includes('codigo')
+            if (!esColisionDeCodigo || intento === 4) throw error
           }
-        } else {
-          bonoError = 'Tu premio ya no está disponible.'
         }
       }
 
       return { cliente, bono }
+    },
+    {
+      // El tope por defecto son 5 s. Un pico de carga o una base remota
+      // (Aiven está fuera de Render) puede rozarlo, y pasarse significa
+      // perder el registro completo de un cliente. 20 s da margen de sobra
+      // sin dejar transacciones colgadas indefinidamente.
+      timeout: 20_000,
+      maxWait: 10_000,
     })
 
     const token = signSessionToken({ tipo: 'cliente', clienteId: resultado.cliente.id, email: resultado.cliente.email })

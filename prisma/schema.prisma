@@ -47,6 +47,58 @@ model Consentimiento {
   @@map("consentimientos")
 }
 
+// Division politica usada por el formulario de registro. Vive en base y no
+// en un archivo del frontend para que se pueda corregir o ampliar sin
+// desplegar, y sobre todo para poder VALIDAR contra ella: antes el backend
+// aceptaba cualquier texto como departamento y ciudad.
+model Departamento {
+  id     Int    @id @default(autoincrement())
+  nombre String @unique
+  // Norte de Santander va de primero: es el departamento de las 3 sedes.
+  orden  Int    @default(0)
+  activo Boolean @default(true)
+
+  municipios Municipio[]
+
+  @@map("departamentos")
+}
+
+model Municipio {
+  id             Int          @id @default(autoincrement())
+  nombre         String
+  departamentoId Int
+  departamento   Departamento @relation(fields: [departamentoId], references: [id], onDelete: Cascade)
+  // Dentro de Norte de Santander, los 6 del Area Metropolitana de Cucuta van
+  // primero porque concentran casi todo el publico.
+  orden          Int          @default(0)
+
+  // Un mismo nombre puede repetirse entre departamentos (Rionegro existe en
+  // Antioquia y en Santander), pero no dentro del mismo.
+  @@unique([departamentoId, nombre])
+  @@index([departamentoId])
+  @@map("municipios")
+}
+
+// Visitante sin cuenta que gira la ruleta. Existe para poder limitar los
+// giros: el endpoint es anonimo, asi que sin esto no hay forma de saber que
+// dos giros vienen de la misma persona.
+//
+// El id viaja en una cookie httpOnly, de modo que el conteo lo lleva el
+// servidor y no el navegador. Ver GIROS_MAXIMOS en ruleta.routes.ts.
+model VisitanteAnonimo {
+  id         String   @id
+  giros      Int      @default(0)
+  primerGiro DateTime @default(now())
+  ultimoGiro DateTime @updatedAt
+  // Se guarda solo para auditar abusos (muchas cookies distintas desde una
+  // misma IP). No se usa para bloquear: en un casino con wifi compartido
+  // dejaria por fuera a clientes legitimos.
+  ip         String?
+
+  @@index([ip])
+  @@map("visitantes_anonimos")
+}
+
 // Los 3 casinos fisicos. Vive en base y no en codigo para que el select del
 // cajero y la asignacion de premios salgan de la misma fuente, y para poder
 // abrir o cerrar una sede sin desplegar.

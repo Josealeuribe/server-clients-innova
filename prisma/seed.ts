@@ -1,4 +1,5 @@
 import { PrismaClient } from '@prisma/client'
+import { DEPARTAMENTOS, TOTAL_MUNICIPIOS } from './ubicaciones.js'
 
 const prisma = new PrismaClient()
 
@@ -91,7 +92,29 @@ const PREMIOS = [
   },
 ]
 
+async function sembrarUbicaciones() {
+  // Se sincroniza por nombre: corregir la tilde de un municipio o agregar uno
+  // nuevo no rompe los clientes que ya lo tienen guardado como texto.
+  for (const [indice, dep] of DEPARTAMENTOS.entries()) {
+    const departamento = await prisma.departamento.upsert({
+      where: { nombre: dep.nombre },
+      update: { orden: indice },
+      create: { nombre: dep.nombre, orden: indice },
+    })
+
+    for (const [posicion, municipio] of dep.municipios.entries()) {
+      await prisma.municipio.upsert({
+        where: { departamentoId_nombre: { departamentoId: departamento.id, nombre: municipio } },
+        update: { orden: posicion },
+        create: { departamentoId: departamento.id, nombre: municipio, orden: posicion },
+      })
+    }
+  }
+}
+
 async function main() {
+  await sembrarUbicaciones()
+
   // Las sedes van primero: los premios se enganchan a ellas por clave.
   for (const sede of SEDES) {
     await prisma.sede.upsert({
@@ -125,7 +148,10 @@ async function main() {
   // para que el número impreso sea la probabilidad real.
   const total = PREMIOS.reduce((suma, p) => suma + p.weight, 0)
 
-  console.log(`Seed completo: ${SEDES.length} sedes y ${PREMIOS.length} premios sincronizados.`)
+  console.log(
+    `Seed completo: ${DEPARTAMENTOS.length} departamentos (${TOTAL_MUNICIPIOS} municipios), ` +
+      `${SEDES.length} sedes y ${PREMIOS.length} premios.`,
+  )
   console.log(`Vigencia de todos los premios: ${VIGENCIA_HASTA.toLocaleDateString('es-CO')}`)
   console.log('Reparto de probabilidad por sede:')
   for (const [sede, peso] of porSede) {
