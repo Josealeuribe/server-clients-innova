@@ -1,4 +1,5 @@
 import { Router } from 'express'
+import { asyncHandler } from '../utils/asyncHandler.js'
 import { prisma } from '../lib/prisma.js'
 import { requireAuth, requireRole } from '../middleware/requireAuth.js'
 import { listarSedesActivas } from '../utils/sedes.js'
@@ -34,9 +35,9 @@ function toCanjePreview(bono: NonNullable<Awaited<ReturnType<typeof buscarPorCod
 }
 
 // El frontend arma el select con esta lista, para no duplicar el catalogo.
-cajeroRouter.get('/sedes', async (_req, res) => {
+cajeroRouter.get('/sedes', asyncHandler(async (_req, res) => {
   return res.json({ sedes: await listarSedesActivas() })
-})
+}))
 
 // Busqueda por documento. Es la salida para el caso real de sede: el cliente
 // llega sin celular, o no recuerda el codigo, o no logra entrar a su cuenta.
@@ -46,7 +47,7 @@ cajeroRouter.get('/sedes', async (_req, res) => {
 // Devuelve el historico completo de su bono (aunque ya este canjeado) para
 // poder responderle "esto ya se entrego el dia X en la sede Y" en vez de un
 // "no aparece nada" que no explica nada.
-cajeroRouter.get('/cliente/:docNumero', async (req, res) => {
+cajeroRouter.get('/cliente/:docNumero', asyncHandler(async (req, res) => {
   const docNumero = req.params.docNumero.trim()
   if (!docNumero) {
     return res.status(400).json({ error: 'Ingresa el número de documento.' })
@@ -100,7 +101,7 @@ cajeroRouter.get('/cliente/:docNumero', async (req, res) => {
         }
       : null,
   })
-})
+}))
 
 function buscarPorCodigo(codigo: string) {
   return prisma.bonoGanado.findUnique({
@@ -116,18 +117,18 @@ function buscarPorCodigo(codigo: string) {
 // Vista previa antes de confirmar el canje: el cajero verifica que el
 // nombre/documento del bono coincidan con la persona que tiene enfrente
 // antes de dar clic en "Confirmar canje".
-cajeroRouter.get('/codigo/:codigo', async (req, res) => {
+cajeroRouter.get('/codigo/:codigo', asyncHandler(async (req, res) => {
   const bono = await buscarPorCodigo(req.params.codigo.trim().toUpperCase())
   if (!bono) {
     return res.status(404).json({ error: 'No existe ningún bono con ese código.' })
   }
   return res.json(toCanjePreview(bono))
-})
+}))
 
 // Confirma el canje. Es la única operación que cambia el estado del bono a
 // 'reclamado'. El cliente lo sigue viendo en su cuenta como constancia de la
 // entrega, con la fecha y la sede (ver toSafeBono en auth.routes.ts).
-cajeroRouter.post('/codigo/:codigo/canjear', async (req, res) => {
+cajeroRouter.post('/codigo/:codigo/canjear', asyncHandler(async (req, res) => {
   const codigo = req.params.codigo.trim().toUpperCase()
   const usuarioId = req.session!.tipo === 'staff' ? req.session!.usuarioId : undefined
 
@@ -164,11 +165,11 @@ cajeroRouter.post('/codigo/:codigo/canjear', async (req, res) => {
 
   const bono = await buscarPorCodigo(codigo)
   return res.json({ ok: true, ...toCanjePreview(bono!) })
-})
+}))
 
 // Historial de todos los bonos ya canjeados (por cualquier cajero), más
 // reciente primero.
-cajeroRouter.get('/historial', async (_req, res) => {
+cajeroRouter.get('/historial', asyncHandler(async (_req, res) => {
   const canjes = await prisma.bonoGanado.findMany({
     where: { estado: 'reclamado' },
     orderBy: { canjeadoEn: 'desc' },
@@ -190,4 +191,4 @@ cajeroRouter.get('/historial', async (_req, res) => {
       cliente: { nombres: bono.cliente.nombres, apellidos: bono.cliente.apellidos, docNumero: bono.cliente.docNumero },
     })),
   })
-})
+}))

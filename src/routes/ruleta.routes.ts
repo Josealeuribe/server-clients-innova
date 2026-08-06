@@ -1,4 +1,5 @@
 import { Router } from 'express'
+import { asyncHandler } from '../utils/asyncHandler.js'
 import { prisma } from '../lib/prisma.js'
 import { weightedRandomIndex } from '../utils/weightedRandom.js'
 import { signPrizeTicket, verifySessionToken } from '../utils/jwt.js'
@@ -13,14 +14,14 @@ export const GIROS_MAXIMOS = 3
 
 // Cuántos giros le quedan al visitante. El frontend lo consulta al entrar
 // para mostrar el contador sin tener que gastar un giro para averiguarlo.
-ruletaRouter.get('/giros-restantes', async (req, res) => {
+ruletaRouter.get('/giros-restantes', asyncHandler(async (req, res) => {
   const usados = await girosUsadosPor(req)
   return res.json({
     usados,
     maximo: GIROS_MAXIMOS,
     restantes: Math.max(0, GIROS_MAXIMOS - usados),
   })
-})
+}))
 
 // Giro anónimo: cualquier visitante puede girar sin haberse registrado
 // (así funciona hoy la promoción). El servidor hace el sorteo ponderado
@@ -28,7 +29,7 @@ ruletaRouter.get('/giros-restantes', async (req, res) => {
 // la ruleta) y devuelve un ticket firmado que el registro usará para
 // asignar el bono a la cuenta que se cree. El ticket expira en
 // TICKET_TTL_MINUTES minutos.
-ruletaRouter.post('/girar-anonimo', async (req, res) => {
+ruletaRouter.post('/girar-anonimo', asyncHandler(async (req, res) => {
   // La promocion es de captacion: gira unicamente quien no tiene sesion
   // abierta. Se rechaza a CUALQUIER sesion valida — clientes porque ya estan
   // registrados, y personal (admin/cajero) porque no participa en la
@@ -89,4 +90,4 @@ ruletaRouter.post('/girar-anonimo', async (req, res) => {
     maximo: GIROS_MAXIMOS,
     restantes: Math.max(0, GIROS_MAXIMOS - girosUsados),
   })
-})
+}))

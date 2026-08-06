@@ -1,5 +1,5 @@
 import 'dotenv/config'
-import express from 'express'
+import express, { type NextFunction, type Request, type Response } from 'express'
 import cors from 'cors'
 import cookieParser from 'cookie-parser'
 import { authRouter } from './routes/auth.routes.js'
@@ -50,7 +50,13 @@ app.use(
 app.use(cookieParser())
 app.use(express.json())
 
-app.get('/api/health', (_req, res) => res.json({ ok: true }))
+// `baseRemota` existe para que las pruebas end-to-end puedan negarse a correr
+// contra una base que no sea local. Pasó de verdad: el DATABASE_URL apuntaba a
+// Aiven y las suites sembraron 319 clientes de prueba en producción.
+// Es solo un booleano — no revela host, usuario ni credenciales.
+const baseRemota = !/@(localhost|127\.0\.0\.1|\[::1\])[:/]/.test(process.env.DATABASE_URL ?? '')
+
+app.get('/api/health', (_req, res) => res.json({ ok: true, baseRemota })) 
 app.use('/api/auth', authRouter)
 app.use('/api/ruleta', ruletaRouter)
 app.use('/api/ubicaciones', ubicacionesRouter)
@@ -59,6 +65,24 @@ app.use('/api/cajero', cajeroRouter)
 
 app.use((_req, res) => {
   res.status(404).json({ error: 'Ruta no encontrada.' })
+})
+
+// Manejador de errores. Recibe lo que los handlers async le pasan por next()
+// (ver utils/asyncHandler.ts). Antes de esto, un fallo de base tumbaba el
+// proceso entero y con él todas las peticiones en curso; ahora solo falla la
+// que tuvo el problema.
+//
+// La firma DEBE tener los 4 parámetros: así es como Express distingue un
+// middleware de error de uno normal, aunque `next` no se use.
+app.use((error: Error, req: Request, res: Response, _next: NextFunction) => {
+  // Al log va el detalle completo, con la ruta, para poder rastrearlo.
+  console.error(`Error no controlado en ${req.method} ${req.originalUrl}:`, error)
+
+  if (res.headersSent) return
+
+  // Al cliente solo un mensaje genérico: los errores de Prisma llevan dentro
+  // fragmentos de consulta y nombres de columnas que no deben salir a la red.
+  res.status(500).json({ error: 'Ocurrió un error inesperado. Intenta de nuevo en un momento.' })
 })
 
 // Una promesa rechazada sin capturar mata el proceso en Node moderno sin

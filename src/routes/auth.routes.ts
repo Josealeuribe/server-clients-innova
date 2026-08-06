@@ -1,4 +1,5 @@
 import { Router } from 'express'
+import { asyncHandler } from '../utils/asyncHandler.js'
 import bcrypt from 'bcryptjs'
 import { z } from 'zod'
 import { Prisma } from '@prisma/client'
@@ -13,7 +14,7 @@ export const authRouter = Router()
 // el frontend lo llama con debounce mientras el usuario escribe su correo o
 // documento, para avisarle de inmediato si ya existe una cuenta, en vez de
 // que se entere solo hasta que intente enviar el registro completo.
-authRouter.get('/disponibilidad', async (req, res) => {
+authRouter.get('/disponibilidad', asyncHandler(async (req, res) => {
   const email = typeof req.query.email === 'string' ? req.query.email.trim().toLowerCase() : undefined
   const docNum = typeof req.query.docNum === 'string' ? req.query.docNum.trim() : undefined
 
@@ -33,7 +34,7 @@ authRouter.get('/disponibilidad', async (req, res) => {
   }
 
   return res.json(result)
-})
+}))
 
 const registerSchema = z
   .object({
@@ -152,7 +153,7 @@ const BONO_INCLUDE = {
   sedeCanjeada: { select: { nombre: true, direccion: true } },
 } as const
 
-authRouter.post('/register', async (req, res) => {
+authRouter.post('/register', asyncHandler(async (req, res) => {
   const parsed = registerSchema.safeParse(req.body)
   if (!parsed.success) {
     return res.status(400).json({ error: parsed.error.issues[0]?.message ?? 'Datos inválidos.' })
@@ -288,14 +289,14 @@ authRouter.post('/register', async (req, res) => {
     console.error('Error creando cliente:', error)
     return res.status(500).json({ error: 'No se pudo crear la cuenta. Intenta de nuevo.' })
   }
-})
+}))
 
 const loginSchema = z.object({
   identifier: z.string().trim().min(1, 'Ingresa tu correo o documento.'),
   password: z.string().min(1, 'Ingresa tu contraseña.'),
 })
 
-authRouter.post('/login', async (req, res) => {
+authRouter.post('/login', asyncHandler(async (req, res) => {
   const parsed = loginSchema.safeParse(req.body)
   if (!parsed.success) {
     return res.status(400).json({ error: parsed.error.issues[0]?.message ?? 'Datos inválidos.' })
@@ -340,9 +341,9 @@ authRouter.post('/login', async (req, res) => {
     bono: toSafeBono(bono),
     ...toEstadoParticipacion(bono),
   })
-})
+}))
 
-authRouter.get('/me', requireAuth, async (req, res) => {
+authRouter.get('/me', requireAuth, asyncHandler(async (req, res) => {
   if (req.session?.tipo === 'staff') {
     const staff = await prisma.usuario.findUnique({ where: { id: req.session.usuarioId } })
     if (!staff) return res.status(404).json({ error: 'Usuario no encontrado.' })
@@ -362,4 +363,4 @@ authRouter.get('/me', requireAuth, async (req, res) => {
     bono: toSafeBono(bono),
     ...toEstadoParticipacion(bono),
   })
-})
+}))

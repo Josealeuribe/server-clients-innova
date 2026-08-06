@@ -1,4 +1,5 @@
 import { Router } from 'express'
+import { asyncHandler } from '../utils/asyncHandler.js'
 import { prisma } from '../lib/prisma.js'
 import { requireAuth, requireRole } from '../middleware/requireAuth.js'
 
@@ -9,7 +10,7 @@ adminRouter.use(requireAuth, requireRole('admin'))
 // Panel de administrador: toda la información de los clientes registrados,
 // incluyendo el estado real de su bono (pendiente/reclamado) — a diferencia
 // de lo que ve el propio cliente, aquí SÍ se muestra un bono ya canjeado.
-adminRouter.get('/clientes', async (_req, res) => {
+adminRouter.get('/clientes', asyncHandler(async (_req, res) => {
   const clientes = await prisma.cliente.findMany({
     orderBy: { createdAt: 'desc' },
     include: {
@@ -51,7 +52,7 @@ adminRouter.get('/clientes', async (_req, res) => {
         : null,
     })),
   })
-})
+}))
 
 // Auditoría de canjes: la traza completa de cada bono entregado, ordenada por
 // fecha de canje. Responde "quién entregó qué, a quién, cuándo y en qué sede",
@@ -60,7 +61,7 @@ adminRouter.get('/clientes', async (_req, res) => {
 // El cajero tiene su propio historial (/cajero/historial); este es el mismo
 // hecho para el admin, con el dato extra de cuánto tardó el cliente en ir a
 // redimir y el correo del titular.
-adminRouter.get('/canjes', async (_req, res) => {
+adminRouter.get('/canjes', asyncHandler(async (_req, res) => {
   const canjes = await prisma.bonoGanado.findMany({
     where: { estado: 'reclamado' },
     orderBy: { canjeadoEn: 'desc' },
@@ -101,4 +102,4 @@ adminRouter.get('/canjes', async (_req, res) => {
       },
     })),
   })
-})
+}))

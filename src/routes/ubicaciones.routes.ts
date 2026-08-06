@@ -1,4 +1,5 @@
 import { Router } from 'express'
+import { asyncHandler } from '../utils/asyncHandler.js'
 import { prisma } from '../lib/prisma.js'
 
 export const ubicacionesRouter = Router()
@@ -9,7 +10,7 @@ export const ubicacionesRouter = Router()
 // Devuelve el árbol completo en una sola llamada. Son ~140 municipios: cabe
 // de sobra en una respuesta y evita un ida y vuelta cada vez que el usuario
 // cambia de departamento.
-ubicacionesRouter.get('/', async (_req, res) => {
+ubicacionesRouter.get('/', asyncHandler(async (_req, res) => {
   const departamentos = await prisma.departamento.findMany({
     where: { activo: true },
     orderBy: { orden: 'asc' },
@@ -25,4 +26,4 @@ ubicacionesRouter.get('/', async (_req, res) => {
       municipios: d.municipios.map((m) => m.nombre),
     })),
   })
-})
+}))
