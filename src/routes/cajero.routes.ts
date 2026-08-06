@@ -167,11 +167,21 @@ cajeroRouter.post('/codigo/:codigo/canjear', asyncHandler(async (req, res) => {
   return res.json({ ok: true, ...toCanjePreview(bono!) })
 }))
 
-// Historial de todos los bonos ya canjeados (por cualquier cajero), más
-// reciente primero.
-cajeroRouter.get('/historial', asyncHandler(async (_req, res) => {
+// Historial de canjes, más reciente primero.
+//
+// Cada cajera ve ÚNICAMENTE los bonos que ella entregó: su panel es su propia
+// caja y no tiene por qué ver el movimiento de sus compañeras. La visión
+// completa del negocio es del admin, en /admin/canjes.
+//
+// Un admin que entre por este panel sí ve todo, porque para él no hay nada
+// que aislar.
+cajeroRouter.get('/historial', asyncHandler(async (req, res) => {
+  const sesion = req.session!
+  const esAdmin = sesion.tipo === 'staff' && sesion.rol === 'admin'
+  const propios = sesion.tipo === 'staff' ? { canjeadoPorId: sesion.usuarioId } : {}
+
   const canjes = await prisma.bonoGanado.findMany({
-    where: { estado: 'reclamado' },
+    where: { estado: 'reclamado', ...(esAdmin ? {} : propios) },
     orderBy: { canjeadoEn: 'desc' },
     include: {
       premio: { include: { sede: { select: { nombre: true } } } },
@@ -182,6 +192,9 @@ cajeroRouter.get('/historial', asyncHandler(async (_req, res) => {
   })
 
   return res.json({
+    // `soloPropios` le permite al frontend titular la vista correctamente:
+    // "Mis canjes" para una cajera, "Todos los canjes" para un admin.
+    soloPropios: !esAdmin,
     canjes: canjes.map((bono) => ({
       codigo: bono.codigo,
       canjeadoEn: bono.canjeadoEn,
