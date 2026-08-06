@@ -142,7 +142,10 @@ cajeroRouter.post('/codigo/:codigo/canjear', asyncHandler(async (req, res) => {
   // Si la cuenta no tiene sede (el admin), se cae a la del premio para no
   // dejar el registro sin sede.
   const operador = usuarioId
-    ? await prisma.usuario.findUnique({ where: { id: usuarioId }, select: { sedeId: true } })
+    ? await prisma.usuario.findUnique({
+        where: { id: usuarioId },
+        select: { sedeId: true, rol: true, sede: { select: { nombre: true } } },
+      })
     : null
   const existente = await buscarPorCodigo(codigo)
   if (!existente) {
@@ -154,6 +157,26 @@ cajeroRouter.post('/codigo/:codigo/canjear', asyncHandler(async (req, res) => {
   if (existente.vigenciaHasta.getTime() < Date.now()) {
     const vence = existente.vigenciaHasta.toLocaleDateString('es-CO', { day: '2-digit', month: 'long', year: 'numeric' })
     return res.status(410).json({ error: `Este bono venció el ${vence} y ya no puede redimirse.` })
+  }
+
+  // El bono SOLO se redime en el casino al que fue asignado. Antes se permitía
+  // el canje cruzado y solo se advertía, porque únicamente Av. 0 tenía
+  // personal y bloquearlo habría dejado sin poder entregar ~68% de los bonos.
+  // Ya con cajeras en las 3 sedes, la regla se aplica de verdad: es lo que se
+  // le prometió al cliente y lo que hace que el reparto por sede signifique
+  // algo.
+  //
+  // El admin queda exento: no pertenece a un casino y debe poder resolver
+  // casos puntuales.
+  const esAdministrador = operador?.rol === 'admin'
+  if (!esAdministrador && existente.premio.sedeId != null && operador?.sedeId !== existente.premio.sedeId) {
+    return res.status(403).json({
+      error:
+        `Este bono solo puede redimirse en ${existente.premio.sede?.nombre ?? 'su casino asignado'}. ` +
+        `Indícale al cliente que se dirija allí.`,
+      sedeRequerida: existente.premio.sede?.nombre ?? null,
+      sedeActual: operador?.sede?.nombre ?? null,
+    })
   }
 
   const resultado = await prisma.bonoGanado.updateMany({

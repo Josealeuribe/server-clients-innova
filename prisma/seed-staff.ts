@@ -81,6 +81,45 @@ const STAFF = [
     rol: 'cajero',
     sede: 'avenida-0',
   },
+
+  // --- Cajeras de Gran Casino Cúcuta Ventura Plaza ---
+  {
+    nombre: 'Katalina Soto',
+    email: 'katalina.soto@grancasino.com.co',
+    password: 'Katalina1093788802',
+    rol: 'cajero',
+    sede: 'ventura-plaza',
+  },
+  {
+    nombre: 'Fernanda Carrillo',
+    email: 'fernanda.carrillo@grancasino.com.co',
+    password: 'Fernanda1092940982',
+    rol: 'cajero',
+    sede: 'ventura-plaza',
+  },
+  {
+    nombre: 'Leidy Zapardiel',
+    email: 'leidy.zapardiel@grancasino.com.co',
+    password: 'Leidy60449024',
+    rol: 'cajero',
+    sede: 'ventura-plaza',
+  },
+
+  // --- Cajeras de Gran Casino Cúcuta Av. 5 ---
+  {
+    nombre: 'Yesica Lorena Moreno Carreño',
+    email: 'yesica.moreno@grancasino.com.co',
+    password: 'Yesica1090178677',
+    rol: 'cajero',
+    sede: 'av-5',
+  },
+  {
+    nombre: 'Leidy Yulieth Fiallo Montañez',
+    email: 'leidy.fiallo@grancasino.com.co',
+    password: 'Leidy1090447613',
+    rol: 'cajero',
+    sede: 'av-5',
+  },
 ]
 
 async function main() {

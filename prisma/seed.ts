@@ -17,10 +17,15 @@ const VIGENCIA_HASTA = new Date('2026-08-31T23:59:59-05:00')
 
 // Los 3 casinos. Se sincronizan por `clave`, así renombrar una sede o
 // corregir su dirección no rompe los premios ni los canjes ya asociados.
+//
+// Las direcciones son las oficiales. Si hay que volver a corregirlas, se hace
+// AQUÍ y se re-ejecuta el seed: la migración que creó la tabla trae las
+// direcciones viejas, pero no se toca — Prisma guarda un checksum de cada
+// migración aplicada y editarla rompería el próximo `migrate deploy`.
 const SEDES = [
-  { clave: 'ventura-plaza', nombre: 'Gran Casino Cúcuta Ventura Plaza', direccion: 'CCial Ventura Plaza, Local 228', orden: 1 },
-  { clave: 'av-5', nombre: 'Gran Casino Cúcuta Av. 5', direccion: 'Av. 5 # 9-30, Centro', orden: 2 },
-  { clave: 'avenida-0', nombre: 'Gran Casino Cúcuta Av. 0', direccion: 'Av. 0 con calle 13, esquina', orden: 3 },
+  { clave: 'ventura-plaza', nombre: 'Gran Casino Cúcuta Ventura Plaza', direccion: 'C.C Ventura Plaza, local 228', orden: 1 },
+  { clave: 'av-5', nombre: 'Gran Casino Cúcuta Av. 5', direccion: 'Av. 5 No. 9-40', orden: 2 },
+  { clave: 'avenida-0', nombre: 'Gran Casino Cúcuta Av. 0', direccion: 'Av. 0 No. 13-04', orden: 3 },
 ]
 
 // Debe reflejar 1:1 el orden/weights de src/shared/data/prizes.ts en el

@@ -7,6 +7,7 @@ import { prisma } from '../lib/prisma.js'
 import { signSessionToken, verifyPrizeTicket } from '../utils/jwt.js'
 import { generarCodigoCanje } from '../utils/codigoCanje.js'
 import { requireAuth } from '../middleware/requireAuth.js'
+import { estadoDeBloqueo, limpiarFallos, registrarFallo } from '../utils/intentosLogin.js'
 
 export const authRouter = Router()
 
@@ -325,6 +326,29 @@ authRouter.post('/login', asyncHandler(async (req, res) => {
   }
   const { identifier, password } = parsed.data
 
+  // Se comprueba ANTES de tocar la base de usuarios: a una cuenta bloqueada
+  // ni siquiera se le evalúa la contraseña.
+  const bloqueo = await estadoDeBloqueo(identifier)
+  if (bloqueo.bloqueado) {
+    const minutos = Math.ceil(bloqueo.segundosRestantes / 60)
+    return res.status(429).json({
+      error: `Demasiados intentos fallidos. Vuelve a intentarlo en ${minutos} ${minutos === 1 ? 'minuto' : 'minutos'}.`,
+      segundosRestantes: bloqueo.segundosRestantes,
+    })
+  }
+
+  // Mensaje único para todos los fallos: no debe poder deducirse si un correo
+  // está registrado. Se agrega cuántos intentos quedan, que es información
+  // que el atacante ya puede contar por su cuenta y al usuario legítimo le
+  // evita quedar bloqueado sin entender por qué.
+  const rechazar = async () => {
+    const { restantes } = await registrarFallo(req, identifier)
+    return res.status(401).json({
+      error: 'Credenciales inválidas.',
+      intentosRestantes: restantes,
+    })
+  }
+
   // El personal (admin/cajero) entra por el mismo formulario de login que
   // los clientes, pero vive en una tabla separada — se identifica por
   // correo, nunca por documento.
@@ -338,8 +362,9 @@ authRouter.post('/login', asyncHandler(async (req, res) => {
     }
     const passwordValida = await bcrypt.compare(password, staff.passwordHash)
     if (!passwordValida) {
-      return res.status(401).json({ error: 'Credenciales inválidas.' })
+      return rechazar()
     }
+    await limpiarFallos(identifier)
     const token = signSessionToken({ tipo: 'staff', usuarioId: staff.id, email: staff.email, rol: staff.rol as 'admin' | 'cajero' })
     return res.json({ token, tipo: 'staff', staff: toSafeStaff(staff) })
   }
@@ -348,13 +373,14 @@ authRouter.post('/login', asyncHandler(async (req, res) => {
     where: { OR: [{ email: identifier.toLowerCase() }, { docNumero: identifier }] },
   })
   if (!cliente) {
-    return res.status(401).json({ error: 'Credenciales inválidas.' })
+    return rechazar()
   }
 
   const passwordValida = await bcrypt.compare(password, cliente.passwordHash)
   if (!passwordValida) {
-    return res.status(401).json({ error: 'Credenciales inválidas.' })
+    return rechazar()
   }
+  await limpiarFallos(identifier)
 
   const bono = await prisma.bonoGanado.findUnique({ where: { clienteId: cliente.id }, include: BONO_INCLUDE })
   const token = signSessionToken({ tipo: 'cliente', clienteId: cliente.id, email: cliente.email })

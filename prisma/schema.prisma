@@ -99,6 +99,34 @@ model VisitanteAnonimo {
   @@map("visitantes_anonimos")
 }
 
+// Intentos fallidos de inicio de sesion, para frenar la fuerza bruta.
+//
+// Hace falta de verdad: las contrasenas iniciales del personal se derivan de
+// la cedula, que en Colombia circula en formularios y fotocopias. Sin un tope
+// de intentos, adivinar una cuenta de cajera es cuestion de tiempo, y con esa
+// cuenta se marcan bonos como entregados.
+//
+// Se lleva en base y no en memoria para que sobreviva a los reinicios: Render
+// reinicia el servicio con cada despliegue, y un contador en memoria le
+// regalaria al atacante un borron y cuenta nueva cada vez.
+//
+// Se indexa por identificador (correo o documento), NO por cuenta existente:
+// tambien se cuentan los intentos contra correos que no existen. Si solo se
+// contaran los reales, un atacante podria deducir que correos estan
+// registrados observando cual se bloquea.
+model IntentoLogin {
+  id             String    @id
+  fallos         Int       @default(0)
+  ultimoFallo    DateTime  @updatedAt
+  bloqueadoHasta DateTime?
+  // Solo para auditar: desde donde vinieron los intentos. No se bloquea por
+  // IP porque en un casino con wifi compartido dejaria fuera a gente legitima.
+  ultimaIp       String?
+
+  @@index([bloqueadoHasta])
+  @@map("intentos_login")
+}
+
 // Los 3 casinos fisicos. Vive en base y no en codigo para que el select del
 // cajero y la asignacion de premios salgan de la misma fuente, y para poder
 // abrir o cerrar una sede sin desplegar.

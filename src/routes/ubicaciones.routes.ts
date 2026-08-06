@@ -20,6 +20,12 @@ ubicacionesRouter.get('/', asyncHandler(async (_req, res) => {
     },
   })
 
+  // Excepción a la política de no-store: es un catálogo público que no
+  // cambia casi nunca y lo pide cada visitante al abrir el registro. Cinco
+  // minutos de caché le ahorran a la base una consulta por visita sin
+  // arriesgar nada: aquí no hay datos personales.
+  res.set('Cache-Control', 'public, max-age=300')
+
   return res.json({
     departamentos: departamentos.map((d) => ({
       nombre: d.nombre,

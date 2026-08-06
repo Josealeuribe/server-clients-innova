@@ -14,6 +14,11 @@ const app = express()
 // balanceador en vez de la del visitante.
 app.set('trust proxy', 1)
 
+// Express anuncia "X-Powered-By: Express" en cada respuesta. No es una
+// vulnerabilidad por sí sola, pero le regala al atacante el primer dato que
+// necesita para buscar exploits conocidos del framework y su versión.
+app.disable('x-powered-by')
+
 // CORS_ORIGIN acepta varios origenes separados por coma: en produccion el
 // front vive en otro dominio de Render, asi que no basta con un valor fijo.
 // Se normaliza la barra final porque un origen nunca la lleva: el navegador
@@ -50,6 +55,18 @@ app.use(
 app.use(cookieParser())
 app.use(express.json())
 
+// NINGUNA respuesta de la API se guarda en caché por defecto.
+//
+// Importa más de lo que parece: los equipos de caja son compartidos entre
+// turnos, y sin esto el navegador podría reponer desde caché el listado de
+// clientes o la ficha de un bono que consultó la cajera anterior. Los
+// endpoints que sí pueden cachearse (catálogos públicos) lo declaran ellos
+// mismos, sobrescribiendo este valor.
+app.use((_req, res, next) => {
+  res.set('Cache-Control', 'no-store')
+  next()
+})
+
 // `baseRemota` existe para que las pruebas end-to-end puedan negarse a correr
 // contra una base que no sea local. Pasó de verdad: el DATABASE_URL apuntaba a
 // Aiven y las suites sembraron 319 clientes de prueba en producción.
@@ -75,10 +92,19 @@ app.use((_req, res) => {
 // La firma DEBE tener los 4 parámetros: así es como Express distingue un
 // middleware de error de uno normal, aunque `next` no se use.
 app.use((error: Error, req: Request, res: Response, _next: NextFunction) => {
+  if (res.headersSent) return
+
+  // Un cuerpo con JSON inválido es culpa de quien llama, no del servidor.
+  // express.json() lanza un SyntaxError con `status` 400 y `body` adjuntos;
+  // sin este caso se convertía en un 500 y quedaba registrado como si fuera
+  // un fallo nuestro.
+  const comoHttp = error as Error & { status?: number; type?: string }
+  if (error instanceof SyntaxError && comoHttp.status === 400 && 'body' in comoHttp) {
+    return res.status(400).json({ error: 'El cuerpo de la petición no es JSON válido.' })
+  }
+
   // Al log va el detalle completo, con la ruta, para poder rastrearlo.
   console.error(`Error no controlado en ${req.method} ${req.originalUrl}:`, error)
-
-  if (res.headersSent) return
 
   // Al cliente solo un mensaje genérico: los errores de Prisma llevan dentro
   // fragmentos de consulta y nombres de columnas que no deben salir a la red.
