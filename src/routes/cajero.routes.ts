@@ -29,6 +29,7 @@ function toCanjePreview(bono: NonNullable<Awaited<ReturnType<typeof buscarPorCod
       registradoEn: bono.cliente.createdAt,
     },
     sedeCanje: bono.sedeCanjeada?.nombre ?? null,
+    canjeadoPor: bono.canjeadoPor?.nombre ?? null,
     // Sede donde el premio dice que debe redimirse.
     sedeRedencion: bono.premio.sede ?? null,
   }
@@ -110,6 +111,7 @@ function buscarPorCodigo(codigo: string) {
       premio: { include: { sede: { select: { clave: true, nombre: true, direccion: true } } } },
       cliente: true,
       sedeCanjeada: { select: { nombre: true } },
+      canjeadoPor: { select: { nombre: true } },
     },
   })
 }
@@ -132,9 +134,16 @@ cajeroRouter.post('/codigo/:codigo/canjear', asyncHandler(async (req, res) => {
   const codigo = req.params.codigo.trim().toUpperCase()
   const usuarioId = req.session!.tipo === 'staff' ? req.session!.usuarioId : undefined
 
-  // La sede ya no la elige el cajero: cada premio pertenece a un casino
-  // (Premio.sedeId) y el bono se redime en ese. Pedirla era una oportunidad
-  // de equivocarse sin ninguna ganancia.
+  // La sede que se registra es la del CAJERO, no la del premio: el bono se
+  // entregó físicamente donde está quien lo entregó. El premio dice a dónde
+  // debía ir el cliente (Premio.sedeId); esto dice dónde acabó yendo.
+  // Guardar ambas es lo que permite ver que se redimió en otro casino.
+  //
+  // Si la cuenta no tiene sede (el admin), se cae a la del premio para no
+  // dejar el registro sin sede.
+  const operador = usuarioId
+    ? await prisma.usuario.findUnique({ where: { id: usuarioId }, select: { sedeId: true } })
+    : null
   const existente = await buscarPorCodigo(codigo)
   if (!existente) {
     return res.status(404).json({ error: 'No existe ningún bono con ese código.' })
@@ -155,7 +164,7 @@ cajeroRouter.post('/codigo/:codigo/canjear', asyncHandler(async (req, res) => {
       estado: 'reclamado',
       canjeadoEn: new Date(),
       canjeadoPorId: usuarioId,
-      sedeCanjeId: existente.premio.sedeId,
+      sedeCanjeId: operador?.sedeId ?? existente.premio.sedeId,
     },
   })
 

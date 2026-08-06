@@ -113,8 +113,9 @@ model Sede {
   activo    Boolean @default(true)
   orden     Int     @default(0)
 
-  premios Premio[]
-  canjes  BonoGanado[]
+  premios  Premio[]
+  canjes   BonoGanado[]
+  usuarios Usuario[]
 
   @@map("sedes")
 }
@@ -197,7 +198,17 @@ model Usuario {
   activo       Boolean  @default(true)
   createdAt    DateTime @default(now())
 
+  // Casino donde trabaja. Es lo que determina la sede que queda registrada al
+  // canjear: el bono se entrego fisicamente donde esta la cajera, no donde
+  // decia el premio. Guardar ambas cosas es lo que permite detectar que
+  // alguien redimio en un casino distinto al asignado.
+  //
+  // Nullable porque el admin no pertenece a una sede concreta.
+  sedeId Int?
+  sede   Sede? @relation(fields: [sedeId], references: [id])
+
   canjes BonoGanado[]
 
+  @@index([sedeId])
   @@map("usuarios")
 }

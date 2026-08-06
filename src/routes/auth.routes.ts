@@ -87,9 +87,25 @@ function toSafeCliente(cliente: {
   }
 }
 
-function toSafeStaff(usuario: { id: number; nombre: string; email: string; rol: string }) {
-  return { id: usuario.id, nombre: usuario.nombre, email: usuario.email, rol: usuario.rol }
+// `sede` va en la sesion para que el panel de la cajera pueda mostrar en que
+// casino esta trabajando, sin tener que consultarlo aparte.
+function toSafeStaff(usuario: {
+  id: number
+  nombre: string
+  email: string
+  rol: string
+  sede?: { clave: string; nombre: string; direccion: string } | null
+}) {
+  return {
+    id: usuario.id,
+    nombre: usuario.nombre,
+    email: usuario.email,
+    rol: usuario.rol,
+    sede: usuario.sede ?? null,
+  }
 }
+
+const STAFF_INCLUDE = { sede: { select: { clave: true, nombre: true, direccion: true } } } as const
 
 // `bono` se oculta en cuanto el cajero lo canjea (ver toSafeBono), asi que
 // por si solo no distingue "nunca participo" de "ya redimio". La ruleta
@@ -119,6 +135,7 @@ function toSafeBono(
         canjeadoEn: Date | null
         vigenciaHasta: Date
         sedeCanjeada: { nombre: string; direccion: string } | null
+        canjeadoPor: { nombre: string } | null
         premio: {
           clave: string
           nombre: string
@@ -140,9 +157,13 @@ function toSafeBono(
     premio,
     // Dónde DEBE ir el cliente a redimirlo: es la sede dueña del premio.
     sedeRedencion: sede,
-    // Dónde se redimió de verdad. Normalmente la misma, pero se guarda aparte
-    // para que un canje hecho en otra sede quede visible en la auditoría.
+    // Dónde se redimió de verdad: el casino de quien lo entregó. Suele
+    // coincidir con sedeRedencion, pero se guarda aparte para que un canje
+    // hecho en otro casino quede visible.
     sede: bono.sedeCanjeada?.nombre ?? null,
+    // Quién se lo entregó. Va en el comprobante del cliente: si más adelante
+    // hay un reclamo, sabe con quién lo atendieron.
+    canjeadoPor: bono.canjeadoPor?.nombre ?? null,
   }
 }
 
@@ -151,6 +172,7 @@ function toSafeBono(
 const BONO_INCLUDE = {
   premio: { include: { sede: { select: { clave: true, nombre: true, direccion: true } } } },
   sedeCanjeada: { select: { nombre: true, direccion: true } },
+  canjeadoPor: { select: { nombre: true } },
 } as const
 
 authRouter.post('/register', asyncHandler(async (req, res) => {
@@ -306,7 +328,10 @@ authRouter.post('/login', asyncHandler(async (req, res) => {
   // El personal (admin/cajero) entra por el mismo formulario de login que
   // los clientes, pero vive en una tabla separada — se identifica por
   // correo, nunca por documento.
-  const staff = await prisma.usuario.findUnique({ where: { email: identifier.toLowerCase() } })
+  const staff = await prisma.usuario.findUnique({
+    where: { email: identifier.toLowerCase() },
+    include: STAFF_INCLUDE,
+  })
   if (staff) {
     if (!staff.activo) {
       return res.status(401).json({ error: 'Esta cuenta está deshabilitada.' })
@@ -345,7 +370,10 @@ authRouter.post('/login', asyncHandler(async (req, res) => {
 
 authRouter.get('/me', requireAuth, asyncHandler(async (req, res) => {
   if (req.session?.tipo === 'staff') {
-    const staff = await prisma.usuario.findUnique({ where: { id: req.session.usuarioId } })
+    const staff = await prisma.usuario.findUnique({
+      where: { id: req.session.usuarioId },
+      include: STAFF_INCLUDE,
+    })
     if (!staff) return res.status(404).json({ error: 'Usuario no encontrado.' })
     return res.json({ tipo: 'staff', staff: toSafeStaff(staff) })
   }
