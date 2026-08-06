@@ -47,6 +47,26 @@ model Consentimiento {
   @@map("consentimientos")
 }
 
+// Los 3 casinos fisicos. Vive en base y no en codigo para que el select del
+// cajero y la asignacion de premios salgan de la misma fuente, y para poder
+// abrir o cerrar una sede sin desplegar.
+//
+// `clave` es el identificador estable (av-5, avenida-0, ventura-plaza): se
+// usa en las relaciones y sobrevive a cambios de nombre comercial.
+model Sede {
+  id        Int     @id @default(autoincrement())
+  clave     String  @unique
+  nombre    String
+  direccion String
+  activo    Boolean @default(true)
+  orden     Int     @default(0)
+
+  premios Premio[]
+  canjes  BonoGanado[]
+
+  @@map("sedes")
+}
+
 // Catálogo administrable de premios de la ruleta "Gira y Gana".
 // `clave` es el identificador estable que el frontend usa para mapear
 // cada premio a su ícono/color (esos datos visuales siguen viviendo en
@@ -60,8 +80,23 @@ model Premio {
   weight    Int
   activo    Boolean      @default(true)
 
+  // Hasta cuando se puede redimir un bono de este premio. Es la fecha de la
+  // campania; cada bono se lleva una copia al crearse (BonoGanado.vigenciaHasta)
+  // para que extender la promocion no cambie lo que ya se le prometio a
+  // alguien, ni acortarla invalide bonos entregados bajo otra condicion.
+  vigenciaHasta DateTime
+
+  // Sede donde se redime este premio. Al sortearse, el bono queda amarrado a
+  // ese casino y al cliente le decimos exactamente a donde ir.
+  //
+  // Nullable porque hay premios que no se redimen en ninguna sede: el giro
+  // adicional se resuelve en la misma ruleta y nunca genera bono.
+  sedeId Int?
+  sede   Sede? @relation(fields: [sedeId], references: [id])
+
   bonos BonoGanado[]
 
+  @@index([sedeId])
   @@map("premios")
 }
 
@@ -74,12 +109,26 @@ model BonoGanado {
   cliente       Cliente  @relation(fields: [clienteId], references: [id], onDelete: Cascade)
   premioId      Int
   premio        Premio   @relation(fields: [premioId], references: [id])
+  // @unique: la base es la que impide de verdad que dos bonos compartan
+  // codigo. Ver generarCodigoCanje para como se reduce la probabilidad de
+  // colision antes de llegar aqui.
   codigo        String   @unique
   estado        String   @default("pendiente") // pendiente | reclamado
   creadoEn      DateTime @default(now())
+  // Copia de Premio.vigenciaHasta al momento de ganarlo. Pasada esta fecha el
+  // cajero no puede canjearlo.
+  vigenciaHasta DateTime
   canjeadoEn    DateTime?
   canjeadoPorId Int?
   canjeadoPor   Usuario? @relation(fields: [canjeadoPorId], references: [id])
+  // Sede donde el cajero entrego fisicamente el bono. Puede diferir de la
+  // sede del premio (Premio.sedeId): esa es donde se DEBE redimir, esta es
+  // donde realmente se redimio. Guardar ambas es lo que permite detectar un
+  // canje hecho en la sede equivocada.
+  //
+  // Nullable porque los canjes anteriores a esta columna no la tienen.
+  sedeCanjeId   Int?
+  sedeCanjeada  Sede? @relation(fields: [sedeCanjeId], references: [id])
 
   @@map("bonos_ganados")
 }

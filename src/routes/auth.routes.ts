@@ -90,18 +90,67 @@ function toSafeStaff(usuario: { id: number; nombre: string; email: string; rol: 
   return { id: usuario.id, nombre: usuario.nombre, email: usuario.email, rol: usuario.rol }
 }
 
-// Una vez el cajero canjea el bono, deja de existir para el cliente: por
-// eso solo se expone aquí si sigue 'pendiente'. El admin sí ve el estado
-// real (incluyendo 'reclamado') a través de /api/admin/clientes.
-function toSafeBono(bono: { codigo: string; estado: string; creadoEn: Date; premio: { clave: string; nombre: string; detalle: string; monetario: boolean } } | null) {
-  if (!bono || bono.estado !== 'pendiente') return null
+// `bono` se oculta en cuanto el cajero lo canjea (ver toSafeBono), asi que
+// por si solo no distingue "nunca participo" de "ya redimio". La ruleta
+// necesita esa diferencia para bloquear un segundo giro, y para eso esta
+// este flag: es true si el cliente tiene un BonoGanado en cualquier estado.
+// La regla de negocio real la impone la base (BonoGanado.clienteId @unique):
+// un cliente no puede acumular mas de un bono en toda su vida.
+function toEstadoParticipacion(bono: { estado: string } | null) {
+  if (!bono) return { yaParticipo: false, bonoCanjeado: false }
+  return { yaParticipo: true, bonoCanjeado: bono.estado === 'reclamado' }
+}
+
+// El bono se le sigue mostrando al cliente DESPUES de canjeado, como
+// constancia de que lo redimio: con la fecha y la sede donde se lo
+// entregaron. Antes se ocultaba en cuanto pasaba a 'reclamado', pero eso
+// dejaba al cliente sin ningun rastro de su premio, que es justo lo que
+// necesita si mas adelante hay un reclamo.
+//
+// `estado` es lo que distingue "disponible para redimir" de "ya redimido";
+// la vista de cliente lo usa para no invitar a presentar un codigo muerto.
+function toSafeBono(
+  bono:
+    | {
+        codigo: string
+        estado: string
+        creadoEn: Date
+        canjeadoEn: Date | null
+        vigenciaHasta: Date
+        sedeCanjeada: { nombre: string; direccion: string } | null
+        premio: {
+          clave: string
+          nombre: string
+          detalle: string
+          monetario: boolean
+          sede: { clave: string; nombre: string; direccion: string } | null
+        }
+      }
+    | null,
+) {
+  if (!bono) return null
+  const { sede, ...premio } = bono.premio
   return {
     codigo: bono.codigo,
     estado: bono.estado,
     creadoEn: bono.creadoEn,
-    premio: bono.premio,
+    canjeadoEn: bono.canjeadoEn,
+    vigenciaHasta: bono.vigenciaHasta,
+    premio,
+    // Dónde DEBE ir el cliente a redimirlo: es la sede dueña del premio.
+    sedeRedencion: sede,
+    // Dónde se redimió de verdad. Normalmente la misma, pero se guarda aparte
+    // para que un canje hecho en otra sede quede visible en la auditoría.
+    sede: bono.sedeCanjeada?.nombre ?? null,
   }
 }
+
+// Include reutilizable: el bono siempre viaja con el premio, la sede donde se
+// redime y la sede donde se redimió.
+const BONO_INCLUDE = {
+  premio: { include: { sede: { select: { clave: true, nombre: true, direccion: true } } } },
+  sedeCanjeada: { select: { nombre: true, direccion: true } },
+} as const
 
 authRouter.post('/register', async (req, res) => {
   const parsed = registerSchema.safeParse(req.body)
@@ -178,8 +227,12 @@ authRouter.post('/register', async (req, res) => {
                   clienteId: cliente.id,
                   premioId: premio.id,
                   codigo: generarCodigoCanje(),
+                  // Copia de la vigencia del premio: si mañana se extiende o
+                  // acorta la promoción, este bono conserva la condición con
+                  // la que se entregó.
+                  vigenciaHasta: premio.vigenciaHasta,
                 },
-                include: { premio: true },
+                include: BONO_INCLUDE,
               })
             } catch (error) {
               const esColisionDeCodigo =
@@ -204,6 +257,7 @@ authRouter.post('/register', async (req, res) => {
       tipo: 'cliente',
       cliente: toSafeCliente(resultado.cliente),
       bono: toSafeBono(resultado.bono),
+      ...toEstadoParticipacion(resultado.bono),
       bonoError,
     })
   } catch (error) {
@@ -252,7 +306,7 @@ authRouter.post('/login', async (req, res) => {
     return res.status(401).json({ error: 'Credenciales inválidas.' })
   }
 
-  const bono = await prisma.bonoGanado.findUnique({ where: { clienteId: cliente.id }, include: { premio: true } })
+  const bono = await prisma.bonoGanado.findUnique({ where: { clienteId: cliente.id }, include: BONO_INCLUDE })
   const token = signSessionToken({ tipo: 'cliente', clienteId: cliente.id, email: cliente.email })
 
   return res.json({
@@ -260,6 +314,7 @@ authRouter.post('/login', async (req, res) => {
     tipo: 'cliente',
     cliente: toSafeCliente(cliente),
     bono: toSafeBono(bono),
+    ...toEstadoParticipacion(bono),
   })
 })
 
@@ -275,11 +330,12 @@ authRouter.get('/me', requireAuth, async (req, res) => {
   if (!cliente) {
     return res.status(404).json({ error: 'Cliente no encontrado.' })
   }
-  const bono = await prisma.bonoGanado.findUnique({ where: { clienteId: cliente.id }, include: { premio: true } })
+  const bono = await prisma.bonoGanado.findUnique({ where: { clienteId: cliente.id }, include: BONO_INCLUDE })
 
   return res.json({
     tipo: 'cliente',
     cliente: toSafeCliente(cliente),
     bono: toSafeBono(bono),
+    ...toEstadoParticipacion(bono),
   })
 })
