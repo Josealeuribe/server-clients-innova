@@ -3,23 +3,29 @@ import { asyncHandler } from '../utils/asyncHandler.js'
 import { prisma } from '../lib/prisma.js'
 import { weightedRandomIndex } from '../utils/weightedRandom.js'
 import { signPrizeTicket, verifySessionToken } from '../utils/jwt.js'
-import { girosUsadosPor, registrarGiro } from '../utils/visitante.js'
+import { asegurarIdentidad, girosUsadosPor, registrarGiro } from '../utils/visitante.js'
 
 export const ruletaRouter = Router()
 
 // Giros que puede hacer un mismo visitante. Recargar la página ya no sirve
-// para volver a tirar: el conteo lo lleva el servidor contra una cookie
-// httpOnly (ver utils/visitante.ts, que documenta hasta dónde llega esto).
+// para volver a tirar: el conteo lo lleva el servidor contra la identidad del
+// visitante (ver utils/visitante.ts, que documenta cómo se sostiene esa
+// identidad en el celular y hasta dónde llega).
 export const GIROS_MAXIMOS = 3
 
 // Cuántos giros le quedan al visitante. El frontend lo consulta al entrar
 // para mostrar el contador sin tener que gastar un giro para averiguarlo.
+//
+// De paso deja establecida la identidad (`visitanteToken`), para que el primer
+// giro ya llegue identificado incluso si el navegador bloquea la cookie.
 ruletaRouter.get('/giros-restantes', asyncHandler(async (req, res) => {
   const usados = await girosUsadosPor(req)
+  const identidad = asegurarIdentidad(req, res)
   return res.json({
     usados,
     maximo: GIROS_MAXIMOS,
     restantes: Math.max(0, GIROS_MAXIMOS - usados),
+    visitanteToken: identidad.token,
   })
 }))
 
@@ -72,7 +78,7 @@ ruletaRouter.post('/girar-anonimo', asyncHandler(async (req, res) => {
 
   // El giro se cuenta aquí, cuando ya se sabe que hay premios que sortear:
   // así un 503 no le consume un intento a nadie.
-  const { girosUsados } = await registrarGiro(req, res)
+  const { girosUsados, token: visitanteToken } = await registrarGiro(req, res)
 
   const index = weightedRandomIndex(premios.map((p) => p.weight))
   const premio = premios[index]
@@ -89,5 +95,6 @@ ruletaRouter.post('/girar-anonimo', asyncHandler(async (req, res) => {
     usados: girosUsados,
     maximo: GIROS_MAXIMOS,
     restantes: Math.max(0, GIROS_MAXIMOS - girosUsados),
+    visitanteToken,
   })
 }))

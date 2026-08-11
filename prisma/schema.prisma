@@ -26,8 +26,43 @@ model Cliente {
 
   consentimientos Consentimiento[]
   bono            BonoGanado?
+  codigosRecuperacion CodigoRecuperacion[]
 
   @@map("clientes")
+}
+
+// Codigo de un solo uso que se le envia al correo del cliente para que pueda
+// recuperar su contrasena.
+//
+// POR QUE UN CODIGO Y NO UN ENLACE
+//
+// El enlace obliga a que el correo abra el navegador correcto: en celular
+// suele abrirse dentro del visor de Gmail y la sesion queda en otro contexto.
+// El codigo se copia a mano en la misma pestana donde el cliente ya estaba,
+// que es donde se le pidio.
+//
+// Se guarda HASHEADO, igual que una contrasena. Quien lea esta tabla no puede
+// deducir el codigo de nadie: durante los 15 minutos que vive, el codigo ES la
+// credencial de la cuenta.
+model CodigoRecuperacion {
+  id         Int      @id @default(autoincrement())
+  clienteId  Int
+  cliente    Cliente  @relation(fields: [clienteId], references: [id], onDelete: Cascade)
+  codigoHash String
+  expiraEn   DateTime
+  // Intentos fallidos al escribir ESTE codigo. Un codigo de 6 digitos se
+  // adivina en 10^6 intentos; sin tope, un script lo saca en minutos.
+  intentos   Int      @default(0)
+  // Se marca al usarlo para que no sirva dos veces, en vez de borrarlo: deja
+  // rastro de que la recuperacion ocurrio.
+  usadoEn    DateTime?
+  creadoEn   DateTime @default(now())
+  ip         String?
+
+  // El endpoint busca "el codigo vivo de este cliente": se ordena por fecha y
+  // se filtra por vencimiento sobre este indice.
+  @@index([clienteId, expiraEn])
+  @@map("codigos_recuperacion")
 }
 
 // Registro auditable de cada aceptación legal del formulario de registro
@@ -225,6 +260,16 @@ model Usuario {
   rol          String // 'admin' | 'cajero'
   activo       Boolean  @default(true)
   createdAt    DateTime @default(now())
+
+  // El personal NO recupera contrasena por correo: sus direcciones
+  // @grancasino.com.co son identificadores de acceso, no buzones (el dominio
+  // no tiene registros MX, no puede recibir nada). En su lugar el admin le
+  // genera una clave temporal desde su panel y este flag obliga a cambiarla
+  // en el siguiente ingreso, para que la temporal no se vuelva la definitiva.
+  //
+  // Tambien arranca en true para las cuentas sembradas cuya clave inicial se
+  // derivo de la cedula, que es semipublica.
+  debeCambiarPassword Boolean @default(false)
 
   // Casino donde trabaja. Es lo que determina la sede que queda registrada al
   // canjear: el bono se entrego fisicamente donde esta la cajera, no donde

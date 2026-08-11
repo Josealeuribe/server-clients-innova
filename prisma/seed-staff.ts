@@ -15,8 +15,11 @@ const prisma = new PrismaClient()
 // documento de una cajera puede deducir su clave — y con esa cuenta se
 // pueden marcar bonos como entregados.
 //
-// Sirven para el primer ingreso. Cada cajera debería cambiarla apenas entre;
-// hoy no existe pantalla para eso (ver nota al final del archivo).
+// Sirven para el primer ingreso y NADA MÁS: las cuentas se crean con
+// `debeCambiarPassword: true`, así que el panel obliga a cambiarla antes de
+// dejar trabajar. Si alguien la olvida, el admin le genera una temporal desde
+// su panel (Personal → Restablecer clave); no hay recuperación por correo
+// porque estas direcciones no son buzones reales.
 //
 // Re-ejecutar este seed NO pisa las contraseñas: el `update` de abajo solo
 // toca nombre y rol. Así, cuando alguien cambie la suya, no se le revierte.
@@ -138,8 +141,19 @@ async function main() {
     await prisma.usuario.upsert({
       where: { email: staff.email },
       // La contraseña no se toca: si alguien ya cambió la suya, no se revierte.
+      // `debeCambiarPassword` tampoco: quien ya la cambió no vuelve a la
+      // pantalla de cambio obligatorio solo por re-ejecutar el seed.
       update: { nombre: staff.nombre, rol: staff.rol, sedeId },
-      create: { nombre: staff.nombre, email: staff.email, passwordHash, rol: staff.rol, sedeId },
+      create: {
+        nombre: staff.nombre,
+        email: staff.email,
+        passwordHash,
+        rol: staff.rol,
+        sedeId,
+        // La clave inicial se deriva de la cédula, que es semipública: sirve
+        // para entrar una vez y cambiarla, no para quedarse.
+        debeCambiarPassword: true,
+      },
     })
   }
   const porRol = STAFF.reduce<Record<string, number>>((acc, s) => {
@@ -150,9 +164,10 @@ async function main() {
   console.log(`  ${Object.entries(porRol).map(([rol, n]) => `${rol}: ${n}`).join(' · ')}`)
 }
 
-// PENDIENTE: no existe forma de que una cajera cambie su propia contraseña.
-// Mientras no la haya, las claves iniciales derivadas de la cédula son las
-// definitivas, que es justo lo que no debería pasar.
+// Resuelto: el panel de cajero y el de admin tienen "Mi cuenta → Cambiar
+// contraseña" (POST /api/auth/cambiar-password), y el cambio es obligatorio
+// mientras `debeCambiarPassword` esté en true. Las claves de esta lista ya no
+// pueden quedarse puestas.
 
 main()
   .catch((error) => {

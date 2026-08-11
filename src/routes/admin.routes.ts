@@ -1,4 +1,6 @@
+import { randomInt } from 'node:crypto'
 import { Router } from 'express'
+import bcrypt from 'bcryptjs'
 import { asyncHandler } from '../utils/asyncHandler.js'
 import { prisma } from '../lib/prisma.js'
 import { requireAuth, requireRole } from '../middleware/requireAuth.js'
@@ -52,6 +54,80 @@ adminRouter.get('/clientes', asyncHandler(async (_req, res) => {
         : null,
     })),
   })
+}))
+
+// --- Personal ---
+//
+// POR QUÉ EL RESET DEL PERSONAL VIVE AQUÍ Y NO EN EL CORREO
+//
+// Las direcciones @grancasino.com.co son identificadores de acceso, no
+// buzones: el dominio no tiene registros MX y no puede recibir nada. Un
+// "olvidé mi contraseña" por correo dejaría a la cajera esperando un mensaje
+// que nunca llega, y sin poder entregar bonos en su turno.
+//
+// El administrador le genera una clave temporal, se la dice en persona o por
+// el canal interno, y `debeCambiarPassword` obliga a cambiarla al entrar. Así
+// la temporal no se queda puesta, que es exactamente lo que pasó con las
+// claves iniciales derivadas de la cédula.
+
+adminRouter.get('/usuarios', asyncHandler(async (_req, res) => {
+  const usuarios = await prisma.usuario.findMany({
+    orderBy: [{ rol: 'asc' }, { nombre: 'asc' }],
+    include: { sede: { select: { nombre: true } }, _count: { select: { canjes: true } } },
+  })
+
+  return res.json({
+    usuarios: usuarios.map((u) => ({
+      id: u.id,
+      nombre: u.nombre,
+      email: u.email,
+      rol: u.rol,
+      activo: u.activo,
+      sede: u.sede?.nombre ?? null,
+      debeCambiarPassword: u.debeCambiarPassword,
+      canjes: u._count.canjes,
+      createdAt: u.createdAt,
+    })),
+  })
+}))
+
+// Alfabeto sin caracteres que se confunden al dictarlos: nada de O/0, I/l/1.
+// La clave se transmite de viva voz en el mostrador, así que un carácter
+// ambiguo se traduce en una cajera que no puede entrar.
+const ALFABETO_TEMPORAL = 'ABCDEFGHJKMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789'
+
+// Cumple la misma política que exige el registro (8+, una mayúscula, un
+// número): la temporal no puede ser más débil que la definitiva.
+function generarPasswordTemporal(): string {
+  const cuerpo = Array.from({ length: 8 }, () => ALFABETO_TEMPORAL[randomInt(0, ALFABETO_TEMPORAL.length)]).join('')
+  return `Gcc${cuerpo}${randomInt(0, 10)}`
+}
+
+adminRouter.post('/usuarios/:id/restablecer-password', asyncHandler(async (req, res) => {
+  const id = Number(req.params.id)
+  if (!Number.isInteger(id) || id <= 0) {
+    return res.status(400).json({ error: 'Usuario inválido.' })
+  }
+
+  const usuario = await prisma.usuario.findUnique({ where: { id }, select: { id: true, nombre: true, email: true } })
+  if (!usuario) return res.status(404).json({ error: 'Usuario no encontrado.' })
+
+  const temporal = generarPasswordTemporal()
+  await prisma.usuario.update({
+    where: { id },
+    data: { passwordHash: await bcrypt.hash(temporal, 10), debeCambiarPassword: true },
+  })
+
+  // Queda en el log del servidor quién restableció a quién. Sin la clave, por
+  // supuesto: el log lo lee más gente de la que debería poder entrar a esa
+  // cuenta.
+  console.warn(
+    `Contraseña restablecida: ${usuario.email} por admin ${req.session?.tipo === 'staff' ? req.session.email : 'desconocido'}`,
+  )
+
+  // La temporal se devuelve UNA sola vez, en esta respuesta, y no se guarda en
+  // ningún lado en claro. Si el admin la pierde, genera otra.
+  return res.json({ ok: true, usuario: { id: usuario.id, nombre: usuario.nombre, email: usuario.email }, temporal })
 }))
 
 // Auditoría de canjes: la traza completa de cada bono entregado, ordenada por

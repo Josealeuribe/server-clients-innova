@@ -6,10 +6,23 @@ import { Prisma } from '@prisma/client'
 import { prisma } from '../lib/prisma.js'
 import { signSessionToken, verifyPrizeTicket } from '../utils/jwt.js'
 import { generarCodigoCanje } from '../utils/codigoCanje.js'
+import { signResetToken, verifyResetToken } from '../utils/jwt.js'
 import { requireAuth } from '../middleware/requireAuth.js'
 import { estadoDeBloqueo, limpiarFallos, registrarFallo } from '../utils/intentosLogin.js'
+import { consumirCodigo, emitirCodigo, LIMITES_RECUPERACION, verificarCodigo } from '../utils/recuperacion.js'
+import { enviarCodigoRecuperacion } from '../utils/correo.js'
 
 export const authRouter = Router()
+
+// Una sola definición de "contraseña aceptable", usada por el registro, por la
+// recuperación y por el cambio desde el panel. Estaba escrita solo en el
+// registro, y así se podía terminar con una contraseña más débil de la que se
+// exigió al crear la cuenta.
+const passwordSchema = z
+  .string()
+  .min(8, 'Mínimo 8 caracteres.')
+  .regex(/[A-Z]/, 'Debe incluir una mayúscula.')
+  .regex(/[0-9]/, 'Debe incluir un número.')
 
 // Chequeo de disponibilidad en tiempo real (antes de enviar el formulario):
 // el frontend lo llama con debounce mientras el usuario escribe su correo o
@@ -48,11 +61,7 @@ const registerSchema = z
     dept: z.string().trim().min(1, 'Departamento requerido.'),
     city: z.string().trim().min(1, 'Ciudad requerida.'),
     email: z.string().trim().toLowerCase().email('Correo inválido.'),
-    pass: z
-      .string()
-      .min(8, 'Mínimo 8 caracteres.')
-      .regex(/[A-Z]/, 'Debe incluir una mayúscula.')
-      .regex(/[0-9]/, 'Debe incluir un número.'),
+    pass: passwordSchema,
     passConfirm: z.string(),
     terminos: z.literal(true, { errorMap: () => ({ message: 'Debes aceptar los términos.' }) }),
     datos: z.literal(true, { errorMap: () => ({ message: 'Debes autorizar el tratamiento de datos.' }) }),
@@ -95,6 +104,7 @@ function toSafeStaff(usuario: {
   nombre: string
   email: string
   rol: string
+  debeCambiarPassword: boolean
   sede?: { clave: string; nombre: string; direccion: string } | null
 }) {
   return {
@@ -103,6 +113,10 @@ function toSafeStaff(usuario: {
     email: usuario.email,
     rol: usuario.rol,
     sede: usuario.sede ?? null,
+    // El panel lo usa para obligar el cambio antes de dejar trabajar: es lo
+    // que impide que una clave temporal (o la inicial derivada de la cédula)
+    // se quede puesta para siempre.
+    debeCambiarPassword: usuario.debeCambiarPassword,
   }
 }
 
@@ -392,6 +406,242 @@ authRouter.post('/login', asyncHandler(async (req, res) => {
     bono: toSafeBono(bono),
     ...toEstadoParticipacion(bono),
   })
+}))
+
+// --- Recuperación de contraseña (clientes) ---
+//
+// El personal NO pasa por aquí: sus direcciones @grancasino.com.co son
+// identificadores de acceso, no buzones — el dominio no tiene registros MX y
+// no puede recibir correo. A una cajera que pida recuperar se le dice
+// explícitamente qué hacer (pedirle al administrador que se la restablezca),
+// porque mandarla a revisar un correo que nunca va a llegar es peor: la deja
+// sin poder trabajar y sin saber por qué.
+//
+// Eso revela que una dirección es de personal. Se acepta a sabiendas: las
+// direcciones del staff son predecibles por construcción (nombre.apellido@) y
+// el mensaje no dice si esa cuenta existe.
+
+const recuperarSchema = z.object({
+  email: z.string().trim().toLowerCase().email('Ingresa un correo válido.'),
+})
+
+authRouter.post('/recuperar', asyncHandler(async (req, res) => {
+  const parsed = recuperarSchema.safeParse(req.body)
+  if (!parsed.success) {
+    return res.status(400).json({ error: parsed.error.issues[0]?.message ?? 'Datos inválidos.' })
+  }
+  const { email } = parsed.data
+
+  const staff = await prisma.usuario.findUnique({ where: { email }, select: { id: true } })
+  if (staff) {
+    return res.status(400).json({
+      error:
+        'Las cuentas del personal no recuperan contraseña por correo. Pídele al administrador que te genere una temporal desde su panel.',
+      esStaff: true,
+    })
+  }
+
+  const cliente = await prisma.cliente.findUnique({
+    where: { email },
+    select: { id: true, nombres: true, email: true },
+  })
+
+  // Respuesta idéntica exista o no la cuenta. Si se distinguiera, esta ruta se
+  // convertiría en un comprobador de qué correos están registrados en un
+  // casino — un dato que no le corresponde a nadie de fuera.
+  const respuestaGenerica = {
+    ok: true,
+    mensaje: 'Si el correo está registrado, te enviamos un código para restablecer tu contraseña.',
+    vigenciaMinutos: LIMITES_RECUPERACION.VIGENCIA_MINUTOS,
+  }
+
+  if (!cliente) return res.json(respuestaGenerica)
+
+  const { emitido, demasiadasSolicitudes } = await emitirCodigo(req, cliente.id)
+  if (demasiadasSolicitudes || !emitido) {
+    // Este 429 sí distingue una cuenta existente de una que no (a la
+    // inexistente nunca se le limita). Es un escape del anonimato de arriba, y
+    // se acepta a cambio de no dejar al cliente legítimo pidiendo códigos que
+    // no se van a enviar sin explicarle por qué. El escape además es menor que
+    // /auth/disponibilidad, que dice sin rodeos si un correo está registrado.
+    return res.status(429).json({
+      error: `Ya pediste varios códigos seguidos. Espera unos minutos e intenta de nuevo, o revisa tu bandeja de spam.`,
+    })
+  }
+
+  try {
+    await enviarCodigoRecuperacion({
+      para: cliente.email,
+      nombre: cliente.nombres,
+      codigo: emitido.codigo,
+      minutos: LIMITES_RECUPERACION.VIGENCIA_MINUTOS,
+    })
+  } catch (error) {
+    // El fallo del proveedor de correo se registra completo y se le dice al
+    // cliente que no llegó. Devolver el mensaje genérico aquí lo dejaría
+    // esperando indefinidamente un correo que ya se sabe que no salió.
+    console.error('No se pudo enviar el código de recuperación:', error)
+    return res.status(502).json({
+      error: 'No pudimos enviar el correo en este momento. Intenta de nuevo en unos minutos.',
+    })
+  }
+
+  return res.json(respuestaGenerica)
+}))
+
+const verificarSchema = z.object({
+  email: z.string().trim().toLowerCase().email('Ingresa un correo válido.'),
+  codigo: z.string().trim().regex(/^\d{6}$/, 'El código son 6 dígitos.'),
+})
+
+authRouter.post('/recuperar/verificar', asyncHandler(async (req, res) => {
+  const parsed = verificarSchema.safeParse(req.body)
+  if (!parsed.success) {
+    return res.status(400).json({ error: parsed.error.issues[0]?.message ?? 'Datos inválidos.' })
+  }
+  const { email, codigo } = parsed.data
+
+  const cliente = await prisma.cliente.findUnique({ where: { email }, select: { id: true } })
+  // Mismo mensaje que un código equivocado: si el correo no existe no debe
+  // notarse la diferencia.
+  const codigoInvalido = () =>
+    res.status(400).json({ error: 'El código no es correcto o ya venció. Pide uno nuevo.' })
+
+  if (!cliente) return codigoInvalido()
+
+  const resultado = await verificarCodigo(cliente.id, codigo)
+  if (!resultado.ok) {
+    if (resultado.motivo === 'incorrecto' && resultado.intentosRestantes > 0) {
+      return res.status(400).json({
+        error: `El código no es correcto. Te ${resultado.intentosRestantes === 1 ? 'queda 1 intento' : `quedan ${resultado.intentosRestantes} intentos`}.`,
+        intentosRestantes: resultado.intentosRestantes,
+      })
+    }
+    if (resultado.motivo === 'agotado' || resultado.intentosRestantes === 0) {
+      return res.status(400).json({
+        error: 'Superaste los intentos permitidos para este código. Pide uno nuevo.',
+        intentosRestantes: 0,
+      })
+    }
+    return codigoInvalido()
+  }
+
+  return res.json({ token: signResetToken({ clienteId: cliente.id, codigoId: resultado.codigoId }) })
+}))
+
+const cambiarConCodigoSchema = z
+  .object({
+    token: z.string().min(1, 'Falta el token de verificación.'),
+    pass: passwordSchema,
+    passConfirm: z.string(),
+  })
+  .refine((data) => data.pass === data.passConfirm, {
+    message: 'Las contraseñas no coinciden.',
+    path: ['passConfirm'],
+  })
+
+authRouter.post('/recuperar/cambiar', asyncHandler(async (req, res) => {
+  const parsed = cambiarConCodigoSchema.safeParse(req.body)
+  if (!parsed.success) {
+    return res.status(400).json({ error: parsed.error.issues[0]?.message ?? 'Datos inválidos.' })
+  }
+
+  let payload
+  try {
+    payload = verifyResetToken(parsed.data.token)
+  } catch {
+    return res.status(401).json({ error: 'La verificación expiró. Vuelve a pedir un código.' })
+  }
+
+  // El código se consume ANTES de tocar la contraseña. Si dos peticiones
+  // llegan a la vez, solo una gana el `updateMany` y la otra se queda sin
+  // cambiar nada: un mismo código no puede usarse dos veces.
+  const consumido = await consumirCodigo(payload.codigoId, payload.clienteId)
+  if (!consumido) {
+    return res.status(400).json({ error: 'Ese código ya se usó o venció. Pide uno nuevo.' })
+  }
+
+  const cliente = await prisma.cliente.findUnique({
+    where: { id: payload.clienteId },
+    select: { id: true, email: true, docNumero: true },
+  })
+  if (!cliente) return res.status(404).json({ error: 'La cuenta ya no existe.' })
+
+  const passwordHash = await bcrypt.hash(parsed.data.pass, 10)
+  await prisma.cliente.update({ where: { id: cliente.id }, data: { passwordHash } })
+
+  // Quien acaba de probar que controla el correo de la cuenta no debería
+  // quedar bloqueado por los intentos fallidos que lo trajeron hasta aquí. Se
+  // limpian los dos identificadores porque al login se entra con cualquiera.
+  await limpiarFallos(cliente.email)
+  await limpiarFallos(cliente.docNumero)
+
+  return res.json({ ok: true })
+}))
+
+// --- Cambio de contraseña con la sesión abierta (clientes y personal) ---
+//
+// Para el personal es la única vía de cambiarla por sí mismo, y es la que
+// cierra el PENDIENTE anotado en prisma/seed-staff.ts: hasta ahora la clave
+// inicial derivada de la cédula era, en la práctica, la definitiva.
+
+const cambiarPasswordSchema = z
+  .object({
+    actual: z.string().min(1, 'Ingresa tu contraseña actual.'),
+    nueva: passwordSchema,
+    confirmar: z.string(),
+  })
+  .refine((data) => data.nueva === data.confirmar, {
+    message: 'Las contraseñas no coinciden.',
+    path: ['confirmar'],
+  })
+  .refine((data) => data.nueva !== data.actual, {
+    message: 'La nueva contraseña debe ser distinta de la actual.',
+    path: ['nueva'],
+  })
+
+authRouter.post('/cambiar-password', requireAuth, asyncHandler(async (req, res) => {
+  const parsed = cambiarPasswordSchema.safeParse(req.body)
+  if (!parsed.success) {
+    return res.status(400).json({ error: parsed.error.issues[0]?.message ?? 'Datos inválidos.' })
+  }
+  const { actual, nueva } = parsed.data
+  const sesion = req.session!
+
+  // Se exige la contraseña actual aunque ya haya sesión: una pantalla
+  // desatendida en el mostrador de caja no debe alcanzar para adueñarse de la
+  // cuenta de la cajera.
+  if (sesion.tipo === 'staff') {
+    const usuario = await prisma.usuario.findUnique({ where: { id: sesion.usuarioId } })
+    if (!usuario) return res.status(404).json({ error: 'Usuario no encontrado.' })
+
+    if (!(await bcrypt.compare(actual, usuario.passwordHash))) {
+      return res.status(401).json({ error: 'La contraseña actual no es correcta.' })
+    }
+
+    await prisma.usuario.update({
+      where: { id: usuario.id },
+      data: { passwordHash: await bcrypt.hash(nueva, 10), debeCambiarPassword: false },
+    })
+    await limpiarFallos(usuario.email)
+    return res.json({ ok: true })
+  }
+
+  const cliente = await prisma.cliente.findUnique({ where: { id: sesion.clienteId } })
+  if (!cliente) return res.status(404).json({ error: 'Cliente no encontrado.' })
+
+  if (!(await bcrypt.compare(actual, cliente.passwordHash))) {
+    return res.status(401).json({ error: 'La contraseña actual no es correcta.' })
+  }
+
+  await prisma.cliente.update({
+    where: { id: cliente.id },
+    data: { passwordHash: await bcrypt.hash(nueva, 10) },
+  })
+  await limpiarFallos(cliente.email)
+  await limpiarFallos(cliente.docNumero)
+
+  return res.json({ ok: true })
 }))
 
 authRouter.get('/me', requireAuth, asyncHandler(async (req, res) => {
