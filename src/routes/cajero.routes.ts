@@ -2,11 +2,14 @@ import { Router } from 'express'
 import { asyncHandler } from '../utils/asyncHandler.js'
 import { prisma } from '../lib/prisma.js'
 import { requireAuth, requireRole } from '../middleware/requireAuth.js'
+import { registrarPresencia } from '../middleware/presencia.js'
 import { listarSedesActivas } from '../utils/sedes.js'
 
 export const cajeroRouter = Router()
 
-cajeroRouter.use(requireAuth, requireRole('admin', 'cajero'))
+// `registrarPresencia` va de último: necesita la sesión que deja requireAuth, y
+// no tiene sentido marcar como presente a quien el rol va a rechazar.
+cajeroRouter.use(requireAuth, requireRole('admin', 'cajero'), registrarPresencia)
 
 function toCanjePreview(bono: NonNullable<Awaited<ReturnType<typeof buscarPorCodigo>>>) {
   return {

@@ -280,6 +280,25 @@ model Usuario {
   sedeId Int?
   sede   Sede? @relation(fields: [sedeId], references: [id])
 
+  // Última señal de vida de esta cuenta. Es lo que sostiene el "Activo / Fuera
+  // de línea" del módulo de Personal.
+  //
+  // POR QUÉ UNA MARCA DE TIEMPO Y NO UN BOOLEANO "conectado"
+  //
+  // La sesión es un JWT sin estado: nadie le avisa al servidor cuando alguien
+  // cierra el navegador, se le va el internet o se le apaga el equipo. Un
+  // booleano quedaría encendido para siempre en todos esos casos, que son los
+  // normales — y un panel de monitoreo que miente es peor que no tenerlo.
+  //
+  // Con una marca de tiempo el estado se DEDUCE: hay actividad reciente o no
+  // la hay. Si el navegador desaparece sin avisar, la cuenta cae sola a fuera
+  // de línea al vencer la ventana (ver VENTANA_EN_LINEA_SEGUNDOS en
+  // middleware/presencia.ts).
+  //
+  // Null = nunca ha entrado, o cerró sesión: el logout la limpia para que el
+  // estado caiga de inmediato en vez de esperar a que venza la ventana.
+  ultimaActividad DateTime?
+
   canjes BonoGanado[]
 
   @@index([sedeId])

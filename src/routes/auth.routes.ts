@@ -8,6 +8,7 @@ import { signSessionToken, verifyPrizeTicket } from '../utils/jwt.js'
 import { generarCodigoCanje } from '../utils/codigoCanje.js'
 import { signResetToken, verifyResetToken } from '../utils/jwt.js'
 import { requireAuth } from '../middleware/requireAuth.js'
+import { marcarFueraDeLinea, registrarPresencia } from '../middleware/presencia.js'
 import { estadoDeBloqueo, limpiarFallos, registrarFallo } from '../utils/intentosLogin.js'
 import { consumirCodigo, emitirCodigo, LIMITES_RECUPERACION, verificarCodigo } from '../utils/recuperacion.js'
 import { enviarCodigoRecuperacion } from '../utils/correo.js'
@@ -641,6 +642,44 @@ authRouter.post('/cambiar-password', requireAuth, asyncHandler(async (req, res) 
   await limpiarFallos(cliente.email)
   await limpiarFallos(cliente.docNumero)
 
+  return res.json({ ok: true })
+}))
+
+// --- Presencia del personal ---
+//
+// El latido que sostiene el "Activo" del módulo de Personal. El panel lo manda
+// cada minuto mientras está abierto.
+//
+// POR QUÉ NO BASTA CON LAS PETICIONES NORMALES
+//
+// Una cajera puede pasar veinte minutos en el mostrador sin tocar el panel,
+// esperando a que llegue alguien con un bono. Sin latido aparecería fuera de
+// línea justo cuando sí está en su puesto, que es el caso que más importa
+// acertar. Con él, el estado dice lo que se espera: el panel está abierto.
+//
+// El middleware `registrarPresencia` hace todo el trabajo (incluido el freno de
+// escrituras); este handler solo confirma. Sirve para cualquier sesión: si
+// llega de un cliente, el middleware la ignora y la respuesta es la misma, para
+// no revelar qué tipo de cuenta hay detrás del token.
+authRouter.post('/actividad', requireAuth, registrarPresencia, asyncHandler(async (_req, res) => {
+  return res.json({ ok: true })
+}))
+
+// Cierre de sesión. Apaga la presencia de una vez, en vez de dejar la cuenta
+// como "Activo" hasta que venza la ventana.
+//
+// LO QUE ESTE ENDPOINT NO HACE, DICHO CLARO: no invalida el token. La sesión es
+// un JWT sin estado y sigue siendo válido hasta que expire — quien tenga ese
+// token copiado puede seguir usándolo. Lo único que se apaga aquí es el
+// indicador de presencia. Revocar de verdad exigiría una lista de tokens
+// anulados, que hoy no existe.
+//
+// No falla si no hay nada que apagar: el navegador llama esto mientras cierra
+// sesión y no tiene sentido mostrarle un error a alguien que ya se está yendo.
+authRouter.post('/salir', requireAuth, asyncHandler(async (req, res) => {
+  if (req.session?.tipo === 'staff') {
+    await marcarFueraDeLinea(req.session.usuarioId)
+  }
   return res.json({ ok: true })
 }))
 

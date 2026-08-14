@@ -4,10 +4,13 @@ import bcrypt from 'bcryptjs'
 import { asyncHandler } from '../utils/asyncHandler.js'
 import { prisma } from '../lib/prisma.js'
 import { requireAuth, requireRole } from '../middleware/requireAuth.js'
+import { estaEnLinea, registrarPresencia, VENTANA_EN_LINEA_SEGUNDOS } from '../middleware/presencia.js'
 
 export const adminRouter = Router()
 
-adminRouter.use(requireAuth, requireRole('admin'))
+// `registrarPresencia` va de último: necesita la sesión que deja requireAuth, y
+// no tiene sentido marcar como presente a quien el rol va a rechazar.
+adminRouter.use(requireAuth, requireRole('admin'), registrarPresencia)
 
 // Panel de administrador: toda la información de los clientes registrados,
 // incluyendo el estado real de su bono (pendiente/reclamado) — a diferencia
@@ -87,7 +90,19 @@ adminRouter.get('/usuarios', asyncHandler(async (_req, res) => {
       debeCambiarPassword: u.debeCambiarPassword,
       canjes: u._count.canjes,
       createdAt: u.createdAt,
+      // Presencia. `enLinea` lo decide el SERVIDOR y no el navegador: comparar
+      // la marca contra el reloj del equipo del admin daría un estado distinto
+      // en cada máquina mal sincronizada, y en un mostrador eso pasa.
+      //
+      // Se manda además la marca cruda para poder decir "hace 12 min", que es
+      // el dato que de verdad sirve cuando alguien NO está: distingue "acaba de
+      // salir" de "no ha entrado en todo el turno".
+      ultimaActividad: u.ultimaActividad,
+      enLinea: estaEnLinea(u.ultimaActividad),
     })),
+    // Va en la respuesta para que el panel pueda explicar el criterio sin
+    // repetir la constante en el frontend, donde se desincronizaría.
+    ventanaEnLineaSegundos: VENTANA_EN_LINEA_SEGUNDOS,
   })
 }))
 

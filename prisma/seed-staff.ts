@@ -29,6 +29,22 @@ const prisma = new PrismaClient()
 // pertenece a un casino concreto.
 const STAFF = [
   { nombre: 'Administrador', email: 'admin@grancasino.com.co', password: 'AdminCucuta0508', rol: 'admin', sede: null },
+
+  // Cuenta de soporte y monitoreo. Va con rol 'admin' a propósito: es la misma
+  // vista del administrador, que es lo que se necesita para monitorear.
+  //
+  // No se creó un rol 'soporte' aparte porque el rol es un conjunto cerrado que
+  // vive en cuatro capas — StaffRol en utils/jwt.ts, requireRole en las rutas,
+  // el tipo del frontend y el enrutamiento tras el login. Un rol nuevo con los
+  // mismos permisos que 'admin' habría costado tocar todo eso y desplegar front
+  // y back, a cambio de ninguna diferencia de comportamiento.
+  //
+  // La consecuencia hay que tenerla clara: en la auditoría esta cuenta es
+  // indistinguible de un administrador y puede restablecer contraseñas del
+  // personal. Si algún día soporte debe poder ver sin poder tocar, ahí sí hace
+  // falta el rol propio.
+  { nombre: 'José Alejandro Uribe', email: 'jose@grancasino.com.co', password: 'SoporteGcc2026', rol: 'admin', sede: null },
+
   // Cuenta genérica de pruebas. Se conserva a propósito: las suites e2e la usan.
   { nombre: 'Cajero', email: 'cajero@grancasino.com.co', password: 'CajeroCucuta0805', rol: 'cajero', sede: 'avenida-0' },
 
